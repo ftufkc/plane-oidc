@@ -11,7 +11,7 @@
    此操作删除旧数据库和附件，仅用于明确不保留历史数据的全新部署。不要清理其他应用。
 5. 在新部署目录执行 `docker compose up -d --pull never`，确认 migrator 以状态 0 退出。
 6. 初始化 God Mode 管理员，配置 Keycloak discovery、client ID、client secret 和回调。
-   Client 回调为 `${WEB_URL}/auth/oidc/callback/`，需要 email/profile scope 和已验证邮箱。
+   Client 回调为 `${WEB_URL}/auth/oidc/callback/`，需要 email/profile scope。未验证邮箱仅允许首次注册或已绑定的 OIDC 身份登录，不能关联已有账号。
 7. 用 Chrome 验证 OIDC 登录、管理员成员管理、默认工作空间及角色、移动入口。
 
 ## PAT MCP

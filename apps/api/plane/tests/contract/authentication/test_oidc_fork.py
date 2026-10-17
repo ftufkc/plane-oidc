@@ -80,8 +80,8 @@ def test_oidc_disabled_does_not_contact_provider():
     "info",
     [
         {"sub": "other", "email": "x@example.com", "email_verified": True},
-        {"sub": "subject", "email": "x@example.com", "email_verified": False},
-        {"sub": "subject", "email": "x@example.com"},
+        {"sub": "subject", "email_verified": True},
+        {"email": "x@example.com", "email_verified": True},
     ],
 )
 def test_oidc_rejects_unverified_or_mismatched_identity(info):
@@ -125,6 +125,7 @@ def test_member_management_create_deactivate_and_delete(admin_user):
     assert invoke("patch", admin_user, {"is_active": False}, user.pk).status_code == 200
     user.refresh_from_db()
     assert user.is_active is False
+    assert user.last_logout_time is not None
     assert invoke("delete", admin_user, pk=user.pk).status_code == 204
     assert not User.objects.filter(pk=user.pk).exists()
 
@@ -200,3 +201,28 @@ def test_id_token_signature_claims_nonce_and_expiry(discovery, nonce, expires, a
             with pytest.raises(AuthenticationException):
                 provider.set_token_data()
         assert "oidc_nonce" not in provider.request.session
+
+
+@pytest.mark.django_db
+def test_unverified_oidc_email_can_register_but_cannot_take_over_existing_account(discovery):
+    import hashlib
+    from plane.db.models import Account
+
+    provider = OIDCOAuthProvider.__new__(OIDCOAuthProvider)
+    provider.logger = __import__("logging").getLogger("test")
+    provider.discovery = discovery
+    provider.userinfo_url = discovery["userinfo_endpoint"]
+    provider.token_data = {"access_token": "token"}
+    provider.claims = {"sub": "subject"}
+    info = {"sub": "subject", "email": "x@example.com", "email_verified": False}
+    with patch("plane.authentication.provider.oauth.oidc.requests.get") as get:
+        get.return_value.json.return_value = info
+        provider.set_user_data()
+        assert provider.email_verified is False
+        user = User.objects.create(email="x@example.com", username="x")
+        with pytest.raises(AuthenticationException):
+            provider.set_user_data()
+        identity = hashlib.sha256((discovery["issuer"] + "|subject").encode()).hexdigest()
+        Account.objects.create(user=user, provider="oidc", provider_account_id=identity)
+        provider.set_user_data()
+        assert provider.user_data["user"]["provider_id"] == identity

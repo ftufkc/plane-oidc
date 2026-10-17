@@ -16,6 +16,7 @@ from plane.authentication.adapter.oauth import OauthAdapter
 from plane.authentication.adapter.error import AUTHENTICATION_ERROR_CODES, AuthenticationException
 from plane.authentication.utils.host import base_host
 from plane.license.utils.instance_value import get_configuration_value
+from plane.db.models import Account, User
 
 
 class OIDCOAuthProvider(OauthAdapter):
@@ -144,7 +145,18 @@ class OIDCOAuthProvider(OauthAdapter):
             self.fail()
         if not info.get("sub") or info["sub"] != self.claims["sub"] or not info.get("email"):
             self.fail()
-        if info.get("email_verified") is not True:
+        email = self.sanitize_email(info["email"])
+        identity = hashlib.sha256((self.discovery["issuer"] + "|" + info["sub"]).encode()).hexdigest()
+        existing = User.objects.filter(email=email).first()
+        self.email_verified = info.get("email_verified") is True
+        self.previously_verified = bool(existing and existing.is_email_verified)
+        # A trusted issuer can provision a new subject without email verification,
+        # but an unverified email must never attach it to an existing account.
+        if (
+            existing
+            and not self.email_verified
+            and not Account.objects.filter(user=existing, provider="oidc", provider_account_id=identity).exists()
+        ):
             self.fail("OAUTH_PROVIDER_UNVERIFIED_EMAIL")
         first_name = info.get("given_name", "")
         last_name = info.get("family_name", "")
@@ -154,10 +166,10 @@ class OIDCOAuthProvider(OauthAdapter):
             last_name = parts[1] if len(parts) > 1 else ""
         super().set_user_data(
             {
-                "email": info["email"],
+                "email": email,
                 "user": {
-                    "provider_id": info["sub"],
-                    "email": info["email"],
+                    "provider_id": identity,
+                    "email": email,
                     "avatar": info.get("picture", ""),
                     "first_name": first_name,
                     "last_name": last_name,
@@ -165,3 +177,11 @@ class OIDCOAuthProvider(OauthAdapter):
                 },
             }
         )
+
+    def complete_login_or_signup(self):
+        user = super().complete_login_or_signup()
+        verified = self.email_verified or self.previously_verified
+        if user.is_email_verified != verified:
+            user.is_email_verified = verified
+            user.save(update_fields=["is_email_verified"])
+        return user

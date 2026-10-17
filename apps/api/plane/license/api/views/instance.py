@@ -297,8 +297,12 @@ class InstanceUsersEndpoint(BaseAPIView):
         active = request.data.get("is_active")
         if not isinstance(active, bool):
             return Response({"error": "is_active must be a boolean"}, status=400)
+        from django.utils import timezone
+
         user.is_active = active
-        user.save(update_fields=["is_active"])
+        if not active:
+            user.last_logout_time = timezone.now()
+        user.save(update_fields=["is_active", "last_logout_time"])
         return Response({"id": str(user.id), "is_active": user.is_active})
 
     def delete(self, request, pk):
