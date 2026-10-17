@@ -1,3 +1,32 @@
+# Plane v1.4.2 + OIDC
+
+本仓库以官方 `makeplane/plane` 的 `v1.4.2`（`5f7d927`）为底座，移植
+`jiyang1018/plane-oidc` 的 `preview-v2`（`d5694d7`）全部定制功能：
+
+- Keycloak 等 OIDC 提供方登录，God Mode 配置、显示名称和图标。
+- God Mode 用户列表、搜索、创建、启用、停用和删除。
+- 新 OIDC 用户自动加入指定工作空间，并配置默认角色。
+- `/m/auth` 移动入口跳转。
+
+移植保留 v1.4.2 的机器人账号登录限制和未验证邮箱保护，增加 PKCE、ID Token
+签名/issuer/audience/nonce 校验、一次性 state 和请求超时；回调使用实例配置地址。
+管理员账号不能在成员管理页被停用或删除，用户删除遵守数据库约束。
+
+## 构建与部署
+
+GitHub Actions 的 **Build OIDC v1.4.2** 工作流构建 linux/amd64 镜像，后端镜像先运行
+OIDC 和成员管理定向测试。每个镜像归档及 SHA-256 校验值作为 Actions artifact 发布。
+镜像按源码提交 SHA 标记，避免浮动标签。
+
+本分支不包含 vilbert 的 MCP OAuth 服务端扩展。MCP 使用独立的官方
+`makeplane/plane-mcp-server` 服务，以个人 PAT 和 `X-Workspace-slug` 鉴权。
+正式启用前须验证所需工具与社区版 API 的兼容性。
+
+私有部署配置、凭据和验证记录放在 `deploy/.local/`，由 Git 忽略。
+保留上游及 jiyang1018 的 AGPL-3.0 版权与授权；下方为上游文档入口。
+
+---
+
 <br /><br />
 
 <p align="center">
@@ -42,7 +71,7 @@ Getting started with Plane is simple. Choose the setup that works best for you:
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Docker               | [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://developers.plane.so/self-hosting/methods/docker-compose)         |
 | Kubernetes           | [![Kubernetes](https://img.shields.io/badge/kubernetes-%23326ce5.svg?style=for-the-badge&logo=kubernetes&logoColor=white)](https://developers.plane.so/self-hosting/methods/kubernetes) |
-| Managed hosting      | [<img alt="Deploy with Zenith" src="https://cdn.zenith.hosting/buttons/deploy-with-zenith.svg" height="40">](https://zenith.hosting/host/plane) |
+| Managed hosting      | [<img alt="Deploy with Zenith" src="https://cdn.zenith.hosting/buttons/deploy-with-zenith.svg" height="40">](https://zenith.hosting/host/plane)                                         |
 
 `Instance admins` can configure instance settings with [God mode](https://developers.plane.so/self-hosting/govern/instance-admin).
 

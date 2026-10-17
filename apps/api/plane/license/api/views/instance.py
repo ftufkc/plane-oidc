@@ -55,6 +55,11 @@ class InstanceEndpoint(BaseAPIView):
             GITHUB_APP_NAME,
             IS_GITLAB_ENABLED,
             IS_GITEA_ENABLED,
+            IS_OIDC_ENABLED,
+            OIDC_ICON_URL,
+            OIDC_DISPLAY_NAME,
+            DEFAULT_WORKSPACE_SLUGS,
+            DEFAULT_USER_ROLE,
             EMAIL_HOST,
             ENABLE_MAGIC_LINK_LOGIN,
             ENABLE_EMAIL_PASSWORD,
@@ -92,6 +97,26 @@ class InstanceEndpoint(BaseAPIView):
                 {
                     "key": "IS_GITEA_ENABLED",
                     "default": os.environ.get("IS_GITEA_ENABLED", "0"),
+                },
+                {
+                    "key": "IS_OIDC_ENABLED",
+                    "default": os.environ.get("IS_OIDC_ENABLED", "0"),
+                },
+                {
+                    "key": "OIDC_ICON_URL",
+                    "default": os.environ.get("OIDC_ICON_URL", ""),
+                },
+                {
+                    "key": "OIDC_DISPLAY_NAME",
+                    "default": os.environ.get("OIDC_DISPLAY_NAME", "SSO"),
+                },
+                {
+                    "key": "DEFAULT_WORKSPACE_SLUGS",
+                    "default": os.environ.get("DEFAULT_WORKSPACE_SLUGS", ""),
+                },
+                {
+                    "key": "DEFAULT_USER_ROLE",
+                    "default": os.environ.get("DEFAULT_USER_ROLE", ""),
                 },
                 {"key": "EMAIL_HOST", "default": os.environ.get("EMAIL_HOST", "")},
                 {
@@ -133,6 +158,11 @@ class InstanceEndpoint(BaseAPIView):
         data["is_github_enabled"] = IS_GITHUB_ENABLED == "1"
         data["is_gitlab_enabled"] = IS_GITLAB_ENABLED == "1"
         data["is_gitea_enabled"] = IS_GITEA_ENABLED == "1"
+        data["is_oidc_enabled"] = IS_OIDC_ENABLED == "1"
+        data["oidc_icon_url"] = OIDC_ICON_URL or ""
+        data["oidc_display_name"] = OIDC_DISPLAY_NAME or "SSO"
+        data["default_workspace_slugs"] = DEFAULT_WORKSPACE_SLUGS or ""
+        data["default_user_role"] = DEFAULT_USER_ROLE or ""
         data["is_magic_login_enabled"] = ENABLE_MAGIC_LINK_LOGIN == "1"
         data["is_email_password_enabled"] = ENABLE_EMAIL_PASSWORD == "1"
 
@@ -197,3 +227,88 @@ class SignUpScreenVisitedEndpoint(BaseAPIView):
         instance.is_signup_screen_visited = True
         instance.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class InstanceUsersEndpoint(BaseAPIView):
+    permission_classes = [InstanceAdminPermission]
+
+    def get(self, request):
+        from plane.db.models import User
+
+        users = (
+            User.objects.filter(is_bot=False)
+            .order_by("-date_joined")
+            .values("id", "email", "first_name", "last_name", "is_active", "date_joined", "last_login")
+        )
+        return Response({"results": list(users)})
+
+    def post(self, request):
+        from uuid import uuid4
+        from django.core.exceptions import ValidationError
+        from django.core.validators import validate_email
+        from django.db import IntegrityError, transaction
+        from zxcvbn import zxcvbn
+        from plane.db.models import User, Profile
+
+        values = {k: request.data.get(k, "") for k in ("email", "first_name", "last_name", "password")}
+        if any(not isinstance(value, str) for value in values.values()):
+            return Response({"error": "All fields must be strings"}, status=400)
+        email = values["email"].strip().lower()
+        first_name = values["first_name"].strip()
+        password = values["password"]
+        try:
+            validate_email(email)
+        except ValidationError:
+            return Response({"error": "A valid email is required"}, status=400)
+        if not first_name or not password or len(password) > 72 or zxcvbn(password)["score"] < 3:
+            return Response(
+                {"error": "First name and a strong password (up to 72 characters) are required"}, status=400
+            )
+        try:
+            with transaction.atomic():
+                user = User(
+                    email=email,
+                    first_name=first_name,
+                    last_name=values["last_name"].strip(),
+                    username=uuid4().hex,
+                    is_active=True,
+                    is_email_verified=True,
+                )
+                user.set_password(password)
+                user.save()
+                Profile.objects.get_or_create(user=user)
+        except IntegrityError:
+            return Response({"error": "User with this email already exists"}, status=400)
+        return Response({"id": str(user.id), "email": user.email}, status=201)
+
+    def _editable_user(self, request, pk):
+        from django.shortcuts import get_object_or_404
+        from rest_framework.exceptions import PermissionDenied
+        from plane.db.models import User
+        from plane.license.models import InstanceAdmin
+
+        user = get_object_or_404(User, pk=pk, is_bot=False)
+        if user.id == request.user.id or user.is_superuser or InstanceAdmin.objects.filter(user=user).exists():
+            raise PermissionDenied("Instance administrators cannot be deactivated or deleted here")
+        return user
+
+    def patch(self, request, pk):
+        user = self._editable_user(request, pk)
+        active = request.data.get("is_active")
+        if not isinstance(active, bool):
+            return Response({"error": "is_active must be a boolean"}, status=400)
+        user.is_active = active
+        user.save(update_fields=["is_active"])
+        return Response({"id": str(user.id), "is_active": user.is_active})
+
+    def delete(self, request, pk):
+        from django.db import IntegrityError, transaction
+        from django.db.models.deletion import ProtectedError
+
+        user = self._editable_user(request, pk)
+        try:
+            with transaction.atomic():
+                user.delete()
+        except (IntegrityError, ProtectedError):
+            return Response({"error": "User still owns protected resources; transfer them before deletion"}, status=409)
+        return Response(status=204)

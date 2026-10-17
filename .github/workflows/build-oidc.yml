@@ -1,0 +1,77 @@
+name: Build OIDC v1.4.2
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/v1.4.2-oidc]
+permissions:
+  contents: read
+concurrency:
+  group: oidc-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: apps/api
+            file: apps/api/Dockerfile.api
+          - name: web
+            context: .
+            file: apps/web/Dockerfile.web
+          - name: admin
+            context: .
+            file: apps/admin/Dockerfile.admin
+          - name: space
+            context: .
+            file: apps/space/Dockerfile.space
+          - name: live
+            context: .
+            file: apps/live/Dockerfile.live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          tags: ftufkc/plane-${{ matrix.name }}-oidc:${{ github.sha }}
+          outputs: type=docker,dest=/tmp/image.tar
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          build-args: |
+            VITE_API_BASE_URL=
+            VITE_WEB_BASE_URL=
+            VITE_ADMIN_BASE_URL=
+            VITE_SPACE_BASE_URL=
+            VITE_LIVE_BASE_URL=
+      - name: Test OIDC and member management
+        if: matrix.name == 'backend'
+        run: |
+          docker load -i /tmp/image.tar
+          docker run -d --name oidc-test-db -e POSTGRES_USER=plane -e POSTGRES_PASSWORD=plane -e POSTGRES_DB=plane -p 5432:5432 postgres:15-alpine
+          docker run -d --name oidc-test-redis -p 6379:6379 valkey/valkey:7-alpine
+          for attempt in $(seq 1 30); do docker exec oidc-test-db pg_isready -U plane && break; sleep 1; done
+          docker run --rm --network host \
+            -e DATABASE_URL=postgresql://plane:plane@127.0.0.1:5432/plane \
+            -e REDIS_URL=redis://127.0.0.1:6379/0 \
+            -e SECRET_KEY=isolated-ci-test-key \
+            -e WEB_URL=http://plane.example:3307 \
+            -e DJANGO_SETTINGS_MODULE=plane.settings.test \
+            ftufkc/plane-backend-oidc:${{ github.sha }} \
+            sh -c 'pip install -q pytest pytest-django pytest-mock factory-boy freezegun && pytest plane/tests/contract/authentication/test_oidc_fork.py'
+      - name: Package deployable image
+        run: |
+          gzip -1 /tmp/image.tar
+          sha256sum /tmp/image.tar.gz > /tmp/image.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plane-${{ matrix.name }}-oidc-amd64
+          path: |
+            /tmp/image.tar.gz
+            /tmp/image.sha256
+          compression-level: 0
+          retention-days: 14
