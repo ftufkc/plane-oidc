@@ -25,7 +25,8 @@
 
 PAT 继承所属用户在 Plane 的权限，Header 不构成权限隔离。
 HTTP 部署依赖现有可信网络；令牌不能写入 Git、公共日志或共享文档。
-当前 MCP 固定为官方 v0.3.4 的 digest，须对实际使用的社区版工具逐项验收。
+当前 MCP 固定为 ftufkc/plane-mcp-server 的九工具 CE 配置，基于官方 v0.3.4，保留 32 个动作。
+MCP 通过公开 WEB_URL 访问 API，以生成浏览器可用的 MinIO 签名地址；代理同时匹配 `/uploads` 与 `/uploads/*`。
 
 ## 后续升级
 
